@@ -33,8 +33,8 @@ body{font-family:'DM Sans',sans-serif;background:#000000;color:var(--text);displ
 /* TOP NAV */
 #topnav{background:#000005;color:white;display:flex;align-items:center;gap:0;flex-shrink:0;border-bottom:1px solid rgba(255,255,255,0.07);height:44px;padding:0 10px;z-index:10;overflow:hidden;}
 .topnav-logo{font-family:'DM Serif Display',serif;font-size:19px;color:#f97316;letter-spacing:1px;padding-right:10px;border-right:2px solid rgba(249,115,22,0.4);margin-right:4px;white-space:nowrap;font-weight:700;}
-@keyframes logoGlow{0%,100%{color:#f97316;text-shadow:0 0 8px rgba(249,115,22,0.4);}50%{color:#fde68a;text-shadow:0 0 16px rgba(253,230,138,0.7);}}
-.topnav-logo span{display:inline-block;animation:logoGlow 2.8s ease-in-out infinite;}
+@keyframes logoShimmer{0%{background-position:200% center;}100%{background-position:-200% center;}}
+#gamez-logo{display:inline-block;background:linear-gradient(90deg,#f97316 0%,#f97316 30%,#fef3c7 48%,#fff8e7 50%,#fef3c7 52%,#f97316 70%,#f97316 100%);background-size:250% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:logoShimmer 2.5s linear infinite;}
 .nav-item{display:flex;align-items:center;gap:4px;padding:5px 8px;cursor:pointer;color:rgba(255,255,255,0.5);font-size:11.5px;transition:all .15s;border-bottom:2px solid transparent;height:44px;white-space:nowrap;user-select:none}
 .nav-item:hover{background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.85)}
 .nav-item.active{color:#f97316;border-bottom-color:#f97316;background:rgba(249,115,22,0.08)}
@@ -2945,8 +2945,8 @@ function renderDashboard(){
   const statGrid=document.getElementById('stat-grid');
   if(statGrid){
     statGrid.innerHTML=
-      '<div class="stat-card" style="padding:5px 8px;"><div style="display:flex;align-items:center;justify-content:space-between;"><div style="font-size:9px;color:var(--text-muted);">Clients</div><div style="font-size:13px;font-weight:700;color:var(--gold-light);">'+active+'</div></div>'+(urgent>0?'<div style="font-size:9px;color:var(--danger);">'+urgent+' urgent</div>':'')+'</div>'+
-      '<div class="stat-card" onclick="showUpcoming30Modal()" style="cursor:pointer;padding:5px 8px;"><div style="display:flex;align-items:center;justify-content:space-between;"><div style="font-size:9px;color:var(--text-muted);">Events</div><div style="font-size:13px;font-weight:700;color:var(--gold);">'+upcoming30.length+'</div></div><div style="font-size:9px;color:var(--text-muted);">30 days</div></div>'+
+      '<div class="stat-card" style="padding:3px 7px;display:flex;align-items:center;gap:6px;"><span style="font-size:8px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">Clients</span><span style="font-size:11px;font-weight:700;color:var(--gold-light);">'+active+(urgent>0?' <span style="color:var(--danger);font-size:9px;">'+urgent+' urgent</span>':'')+' </span></div>'+
+      '<div class="stat-card" onclick="showUpcoming30Modal()" style="cursor:pointer;padding:3px 7px;display:flex;align-items:center;gap:6px;"><span style="font-size:8px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">Events</span><span style="font-size:11px;font-weight:700;color:var(--gold);">'+upcoming30.length+' <span style="font-size:8px;color:var(--text-muted);">/ 30d</span></span></div>'+
       '<div class="stat-card">'+pinLockedHtml('<div style="padding:6px 10px;"><div class="stat-label" style="font-size:9px;">Collected</div><div class="stat-value" style="font-size:22px;">'+fmtMoney(ttlPaid)+'</div><div class="stat-sub">of '+fmtMoney(ttlCharged)+' billed</div></div>','dash-collected')+'</div>'+
       '<div class="stat-card">'+pinLockedHtml('<div style="padding:6px 10px;"><div class="stat-label" style="font-size:9px;">Outstanding</div><div class="stat-value" style="font-size:22px;color:'+(outstanding>0?'var(--warn)':'var(--success)')+';">'+fmtMoney(outstanding)+'</div><div class="stat-sub">across all clients</div></div>','dash-outstanding')+'</div>';
   }
@@ -3256,7 +3256,51 @@ function renderClientDetail(id){
     return formatted+' · '+age+' yrs old';
   })();
 
+    // RIGHT COLUMN — court dates: upcoming soonest-first, past dates below with divider
+  const todayDateStr=todayStr();
+  const upcomingEvs=[...c.events].filter(function(e){return e.date>=todayDateStr;}).sort(function(a,b){return a.date.localeCompare(b.date);});
+  const pastEvs=[...c.events].filter(function(e){return e.date<todayDateStr;}).sort(function(a,b){return b.date.localeCompare(a.date);});
+  const allSortedEvs=upcomingEvs.concat(pastEvs);
+  const evHtmlFn=function(ev){
+    const d=new Date(ev.date+'T12:00:00');
+    const isPast=d<TODAY;
+    const isDone=ev.done===true;
+    const days=Math.ceil((d-TODAY)/86400000);
+    const mon=d.toLocaleDateString('en-US',{month:'short'});
+    const day=d.getDate();
+    const evType=(ev.type||'').toLowerCase();
+    let evIcon=ev.icon||''; let evColor='#4db8ff';
+    if(!evIcon){if(/office|consult|meeting|appointment/i.test(evType)){evIcon='📋';evColor='#4ade80';}}
+    else if(/civil|clv|civ/i.test(evType)){evIcon='📄';evColor='#c084fc';}
+    else if(/zoom|phone|video|remote/i.test(evType)){evIcon='📞';evColor='#fbbf24';}
+    else if(/alr|admin|dmv/i.test(evType)){evIcon='🚗';evColor='#fb923c';}
+    else if(/plea|sentenc/i.test(evType)){evIcon='⚖️';evColor='#f87171';}
+    else if(/jury|trial/i.test(evType)){evIcon='👨‍⚖️';evColor='#f97316';}
+    else if(/bond|bail/i.test(evType)){evIcon='💰';evColor='#fbbf24';}
+    else if(/mental|health/i.test(evType)){evIcon='🏥';evColor='#86efac';}
+    const dateColor=isDone?'#4ade80':isPast?'#4a9edd':days<=3?'#f87171':days<=7?'#fbbf24':'#c8e8ff';
+    const cs2=(c.cases||[]).find(x=>x.id===ev.caseId);
+    const caseInfo=cs2?' · '+escHtml(cs2.caseNo):'';
+    const ct2=(appData.courts||[]).find(ct=>ct.name===ev.court);
+    const courtInfo=ev.court?escHtml(ev.court)+(ct2&&ct2.floor?' F'+escHtml(ct2.floor):''):'';
+    var pulseClass=(!isDone&&!isPast&&days<=1)?' urgent-pulse':'';
+    return '<div class="'+pulseClass+'" style="display:flex;align-items:center;gap:8px;padding:7px 16px;border-bottom:1px solid rgba(212,105,30,0.15);'+(isDone?'opacity:0.55;':'')+'">'
+      +'<span style="font-size:18px;flex-shrink:0;">'+evIcon+'</span>'
+      +'<div style="flex:1;min-width:0;">'
+        +'<div style="font-size:13px;font-weight:600;color:'+evColor+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+escHtml(ev.type||'')+caseInfo+'</div>'
+        +'<div style="font-size:11px;color:#4a9edd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(ev.time?ev.time+' · ':'')+courtInfo+(ev.notes?' · '+ev.notes:'')+'</div>'
+      +'</div>'
+      +'<div style="text-align:right;flex-shrink:0;">'
+        +'<div style="font-size:13px;font-weight:700;color:'+dateColor+';">'+mon+' '+day+'</div>'
+        +'<div style="font-size:10px;color:'+dateColor+';">'+(isDone?'Done':isPast?'Past':days===0?'Today':days+'d')+'</div>'
+      +'</div>'
+      +'<div style="display:flex;gap:4px;flex-shrink:0;">'
+        +'<span onclick="toggleEventDone('+id+','+ev.id+')" style="font-size:15px;cursor:pointer;color:'+(isDone?'#4ade80':'#4a9edd')+';opacity:'+(isDone?'1':'0.5')+';">☑</span>'
+        +'<span class="del-icon" onclick="confirmDelete(\'event\','+id+','+ev.id+')">✕</span>'
+      +'</div></div>';
+  };
   document.getElementById('detail-left').innerHTML=`
+
 
     <div class="info-section">
       <div class="info-header">Cases <span class="edit-icon" onclick="openModal('add-case',${id})">+ Add Case</span></div>
@@ -3436,50 +3480,8 @@ function renderClientDetail(id){
     </div>
   `;
 
-  // RIGHT COLUMN — court dates: upcoming soonest-first, past dates below with divider
-  const todayDateStr=todayStr();
-  const upcomingEvs=[...c.events].filter(function(e){return e.date>=todayDateStr;}).sort(function(a,b){return a.date.localeCompare(b.date);});
-  const pastEvs=[...c.events].filter(function(e){return e.date<todayDateStr;}).sort(function(a,b){return b.date.localeCompare(a.date);});
-  const allSortedEvs=upcomingEvs.concat(pastEvs);
-  const evHtmlFn=function(ev){
-    const d=new Date(ev.date+'T12:00:00');
-    const isPast=d<TODAY;
-    const isDone=ev.done===true;
-    const days=Math.ceil((d-TODAY)/86400000);
-    const mon=d.toLocaleDateString('en-US',{month:'short'});
-    const day=d.getDate();
-    const evType=(ev.type||'').toLowerCase();
-    let evIcon=ev.icon||''; let evColor='#4db8ff';
-    if(!evIcon){if(/office|consult|meeting|appointment/i.test(evType)){evIcon='📋';evColor='#4ade80';}}
-    else if(/civil|clv|civ/i.test(evType)){evIcon='📄';evColor='#c084fc';}
-    else if(/zoom|phone|video|remote/i.test(evType)){evIcon='📞';evColor='#fbbf24';}
-    else if(/alr|admin|dmv/i.test(evType)){evIcon='🚗';evColor='#fb923c';}
-    else if(/plea|sentenc/i.test(evType)){evIcon='⚖️';evColor='#f87171';}
-    else if(/jury|trial/i.test(evType)){evIcon='👨‍⚖️';evColor='#f97316';}
-    else if(/bond|bail/i.test(evType)){evIcon='💰';evColor='#fbbf24';}
-    else if(/mental|health/i.test(evType)){evIcon='🏥';evColor='#86efac';}
-    const dateColor=isDone?'#4ade80':isPast?'#4a9edd':days<=3?'#f87171':days<=7?'#fbbf24':'#c8e8ff';
-    const cs2=(c.cases||[]).find(x=>x.id===ev.caseId);
-    const caseInfo=cs2?' · '+escHtml(cs2.caseNo):'';
-    const ct2=(appData.courts||[]).find(ct=>ct.name===ev.court);
-    const courtInfo=ev.court?escHtml(ev.court)+(ct2&&ct2.floor?' F'+escHtml(ct2.floor):''):'';
-    var pulseClass=(!isDone&&!isPast&&days<=1)?' urgent-pulse':'';
-    return '<div class="'+pulseClass+'" style="display:flex;align-items:center;gap:8px;padding:7px 16px;border-bottom:1px solid rgba(212,105,30,0.15);'+(isDone?'opacity:0.55;':'')+'">'
-      +'<span style="font-size:18px;flex-shrink:0;">'+evIcon+'</span>'
-      +'<div style="flex:1;min-width:0;">'
-        +'<div style="font-size:13px;font-weight:600;color:'+evColor+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+escHtml(ev.type||'')+caseInfo+'</div>'
-        +'<div style="font-size:11px;color:#4a9edd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(ev.time?ev.time+' · ':'')+courtInfo+(ev.notes?' · '+ev.notes:'')+'</div>'
-      +'</div>'
-      +'<div style="text-align:right;flex-shrink:0;">'
-        +'<div style="font-size:13px;font-weight:700;color:'+dateColor+';">'+mon+' '+day+'</div>'
-        +'<div style="font-size:10px;color:'+dateColor+';">'+(isDone?'Done':isPast?'Past':days===0?'Today':days+'d')+'</div>'
-      +'</div>'
-      +'<div style="display:flex;gap:4px;flex-shrink:0;">'
-        +'<span onclick="toggleEventDone('+id+','+ev.id+')" style="font-size:15px;cursor:pointer;color:'+(isDone?'#4ade80':'#4a9edd')+';opacity:'+(isDone?'1':'0.5')+';">☑</span>'
-        +'<span class="del-icon" onclick="confirmDelete(\'event\','+id+','+ev.id+')">✕</span>'
-      +'</div></div>';
-  };
   document.getElementById('detail-right').innerHTML=`
+
     <div class="info-section">
       <div class="info-header">👮 Probation / Pretrial Officer
         <span class="edit-icon" onclick="openModal('edit-officer',${id})">✎ Edit</span>
