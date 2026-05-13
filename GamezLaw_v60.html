@@ -2129,7 +2129,8 @@ function renderInactivityAlert(){
   Object.keys(appData.followupDismissed).forEach(function(id){ if(appData.followupDismissed[id]<now2){ delete appData.followupDismissed[id]; try{var _ld2=JSON.parse(store.get('gamezlaw_followup_dismissed')||'{}');delete _ld2[id];store.set('gamezlaw_followup_dismissed',JSON.stringify(_ld2));}catch(e){} } });
   var stale=(appData.clients||[]).filter(function(c){
     if((c.status||'active')==='closed'||(c.status||'active')==='resolved') return false;
-    if(appData.followupDismissed[String(c.id)]) return false;
+    if(_followupDismissedSet.has(String(c.id))) return false; // in-memory (instant)
+    if(appData.followupDismissed&&appData.followupDismissed[String(c.id)]) return false; // persisted
     var allDates=[];
     (c.notes||[]).forEach(function(n){ if(n.date) allDates.push(n.date); });
     (c.events||[]).forEach(function(e){ if(e.date) allDates.push(e.date); });
@@ -3236,6 +3237,7 @@ function showReceiptStamp(bal){
 }
 
 var _receiptStampOverride='auto';
+var _followupDismissedSet=new Set(); // in-memory dismiss for instant card removal
 function setReceiptStampOverride(val){
   _receiptStampOverride=val;
   ['auto','none','paid','balance','missed','jeopardy'].forEach(function(v){
@@ -5073,25 +5075,30 @@ async function completeTaskFromBriefing(taskId){
 
 
 async function dismissFollowup(clientId){
+  var key=String(clientId);
+  // Add to in-memory set for instant removal (no async needed)
+  _followupDismissedSet.add(key);
+  // Also persist to appData and localStorage
   if(!appData.followupDismissed) appData.followupDismissed={};
   var d=new Date(); d.setDate(d.getDate()+7);
-  var key=String(clientId);
   appData.followupDismissed[key]=d.toISOString().slice(0,10);
-  // Also store in localStorage for instant access before cloud sync
   try{ var ld=JSON.parse(store.get('gamezlaw_followup_dismissed')||'{}'); ld[key]=appData.followupDismissed[key]; store.set('gamezlaw_followup_dismissed',JSON.stringify(ld)); }catch(e){}
-  renderFollowUpCard(); // render immediately
+  renderFollowUpCard();
   showToast('Dismissed for 7 days');
-  saveData(); // save async, no await
+  saveData();
 }
 async function contactedTodayFollowup(clientId){
+  var key=String(clientId);
+  // Add to in-memory set for instant removal
+  _followupDismissedSet.add(key);
   var c=getClient(clientId);
-  if(!c) return;
-  if(!c.commLog) c.commLog=[];
-  c.commLog.push({id:uid(),type:'Phone Call',date:todayStr(),by:currentRole==='attorney'?'J. Mario Gámez':'Claudia',note:'Quick contact logged from Needs Follow-Up'});
-  renderFollowUpCard(); // render immediately
-  saveData(); // save async
-  renderDashboard();
+  if(c){
+    if(!c.commLog) c.commLog=[];
+    c.commLog.push({id:uid(),type:'Phone Call',date:todayStr(),by:currentRole==='attorney'?'J. Mario Gámez':'Claudia',note:'Quick contact logged from Needs Follow-Up'});
+  }
+  renderFollowUpCard();
   showToast('Contacted — logged to comm log');
+  if(c) saveData();
 }
 
 function renderFollowUpCard(){
