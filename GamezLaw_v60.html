@@ -2013,7 +2013,7 @@ async function sendEodReport(){
   try{
     await emailjs.send(EMAILJS_SERVICE,EMAILJS_TEMPLATE,{
       client_name:'End of Day Report',
-      client_email:'jmgamezlaw@gmail.com',
+      client_email:'gamez4@aol.com',
       receipt_body:html,
       email_subject:'EOD Report — GÁMEZ LAW — '+fmtDate(today)
     });
@@ -9497,7 +9497,7 @@ async function sendDailySummaryToClaudia(){
   if(lastSent===today) return; // Already sent today
   try{
     var html=buildDailySummaryEmail();
-    await emailjs.send(EMAILJS_SERVICE,EMAILJS_TEMPLATE,{client_name:'Claudia — Daily Briefing',client_email:'cyvett_23@yahoo.com',email_subject:'Daily Briefing — GÁMEZ LAW',receipt_body:html});
+    await emailjs.send(EMAILJS_SERVICE,EMAILJS_TEMPLATE,{client_name:'Claudia — Daily Briefing',client_email:'cyvette_23@yahoo.com',email_subject:'Daily Briefing — GÁMEZ LAW',receipt_body:html});
     appData.dailySummaryLastSent=today;
     await saveData();
     console.log('Daily summary sent to Claudia');
@@ -9506,8 +9506,6 @@ async function sendDailySummaryToClaudia(){
 
 async function sendWeeklySummaryToAttorney(){
   var now=new Date();
-  var dayOfWeek=now.getDay(); // 0=Sunday, 1=Monday
-  if(dayOfWeek!==0 && dayOfWeek!==1) return; // Only on Sunday or Monday
   var lastSent=appData.weeklySummaryLastSent||'';
   var today=todayStr();
   if(lastSent===today) return;
@@ -9543,7 +9541,7 @@ async function sendWeeklySummaryToAttorney(){
     +'<div style="font-size:11px;color:#999;text-align:center;">Law Office of J. Mario Gámez · (210) 222-0500</div>'
     +'</div>';
   try{
-    await emailjs.send(EMAILJS_SERVICE,EMAILJS_TEMPLATE,{client_name:'Weekly Summary — GamezLaw',client_email:'jmgamezlaw@gmail.com',email_subject:'Weekly Briefing — GÁMEZ LAW',receipt_body:html});
+    await emailjs.send(EMAILJS_SERVICE,EMAILJS_TEMPLATE,{client_name:'Weekly Summary — GamezLaw',client_email:'gamez4@aol.com',email_subject:'Weekly Briefing — GÁMEZ LAW',receipt_body:html});
     appData.weeklySummaryLastSent=today;
     await saveData();
     console.log('Weekly summary sent to attorney');
@@ -10023,8 +10021,8 @@ async function emailReceipt(){
     });
     // CC the attorney and Claudia
     var ccBody='<div style="font-family:Georgia,serif;font-size:12px;color:#555;padding:8px;background:#f5f5f5;border-radius:4px;margin-bottom:12px;">CC copy — receipt sent to '+escHtml(c.email)+'</div>'+body;
-    await emailjs.send(EMAILJS_SERVICE, EMAILJS_TEMPLATE, {client_name:'CC — '+c.name,client_email:'jmgamezlaw@gmail.com',email_subject:'Receipt CC — '+c.name,receipt_body:ccBody});
-    await emailjs.send(EMAILJS_SERVICE, EMAILJS_TEMPLATE, {client_name:'CC — '+c.name,client_email:'cyvett_23@yahoo.com',email_subject:'Receipt CC — '+c.name,receipt_body:ccBody});
+    await emailjs.send(EMAILJS_SERVICE, EMAILJS_TEMPLATE, {client_name:'CC — '+c.name,client_email:'gamez4@aol.com',email_subject:'Receipt CC — '+c.name,receipt_body:ccBody});
+    await emailjs.send(EMAILJS_SERVICE, EMAILJS_TEMPLATE, {client_name:'CC — '+c.name,client_email:'cyvette_23@yahoo.com',email_subject:'Receipt CC — '+c.name,receipt_body:ccBody});
     btn.textContent='✓ Sent!';
     showToast('Receipt emailed to '+c.email+' — CC sent');
     // Log the receipt
