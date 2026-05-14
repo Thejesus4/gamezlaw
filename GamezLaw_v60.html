@@ -1609,11 +1609,22 @@ function confirmRemovePin(){
 }
 
 // ══════════════════════════════════════════════════════════
-//  FIREBASE SYNC
+//  FIREBASE SYNC v2 — Granular writes + real-time listeners
+//  Paths:
+//    gamezlaw/clients/{id}  — one node per client (NEW)
+//    gamezlaw/meta          — courts, tasks, leads, archives (NEW)
+//    gamezlaw/messages      — real-time message channel (unchanged)
+//    gamezlaw/pings         — ping notifications (unchanged)
+//  Old gamezlaw/data blob is migrated on first startup then deleted.
 // ══════════════════════════════════════════════════════════
 let _fbApp = null;
 let _fbDb  = null;
 let _fbMsgListener = null;
+let _pendingOfflineSave = false;
+let _metaSaveTimer = null;
+// Set this to a client id before saveData() when creating a client
+// outside the client-detail view (no state.currentClientId available)
+let _specificClientDirty = null;
 
 // Firebase config baked in — no setup needed
 const BAKED_FB_CONFIG = {
@@ -1627,24 +1638,78 @@ const BAKED_FB_CONFIG = {
   measurementId: "G-ZFV21WLGPB"
 };
 
-function getFbConfig(){
-  return BAKED_FB_CONFIG;
-}
+function getFbConfig(){ return BAKED_FB_CONFIG; }
 function isSyncReady(){ return _fbDb !== null; }
 
+// ── META BUILDER ──
+// Extracts everything except clients and messages for the meta node.
+function buildMeta(){
+  return {
+    courts:                appData.courts||[],
+    personalEvents:        appData.personalEvents||[],
+    leads:                 appData.leads||[],
+    mailerLog:             appData.mailerLog||[],
+    attorneyTasks:         appData.attorneyTasks||[],
+    secretaryTasks:        appData.secretaryTasks||[],
+    dailySummaryLastSent:  appData.dailySummaryLastSent||'',
+    weeklySummaryLastSent: appData.weeklySummaryLastSent||'',
+    eodArchive:            (appData.eodArchive||[]).slice(0,30),
+    messageArchive:        appData.messageArchive||[]
+  };
+}
+
+// ── DEBOUNCED META SAVE — fires 500ms after last call ──
+function _scheduledMetaSave(){
+  if(!_fbDb) return;
+  clearTimeout(_metaSaveTimer);
+  _metaSaveTimer = setTimeout(function(){
+    _fbDb.ref('gamezlaw/meta').set(buildMeta()).catch(function(e){
+      console.warn('GamezLaw: meta save failed',e);
+      _pendingOfflineSave = true;
+    });
+  },500);
+}
+
+// ── CLOUD GET — reads from new granular paths in parallel ──
 async function cloudGet(){
   if(!_fbDb) return null;
   try{
-    const snap = await _fbDb.ref('gamezlaw/data').once('value');
-    return normalizeAppData(snap.val());
+    var snaps = await Promise.all([
+      _fbDb.ref('gamezlaw/clients').once('value'),
+      _fbDb.ref('gamezlaw/meta').once('value'),
+      _fbDb.ref('gamezlaw/messages').once('value')
+    ]);
+    var clientsVal = snaps[0].val();
+    var clients = clientsVal
+      ? (Array.isArray(clientsVal) ? clientsVal : Object.values(clientsVal))
+      : [];
+    var meta = snaps[1].val()||{};
+    var msgsVal = snaps[2].val();
+    var messages = msgsVal
+      ? (Array.isArray(msgsVal) ? msgsVal : Object.values(msgsVal))
+      : [];
+    var combined = { clients:clients, messages:messages };
+    Object.keys(meta).forEach(function(k){ combined[k]=meta[k]; });
+    return normalizeAppData(combined);
   }catch(e){ return null; }
 }
 
+// ── CLOUD SET — full write; used for migration and emergency backup ──
 async function cloudSet(data){
   if(!_fbDb) return false;
   setSyncStatus('syncing','Saving…');
   try{
-    await _fbDb.ref('gamezlaw/data').set(data);
+    var clients = data.clients||[];
+    var writes = clients.map(function(c){
+      return _fbDb.ref('gamezlaw/clients/'+c.id).set(c);
+    });
+    var metaData = {};
+    Object.keys(data).forEach(function(k){
+      if(k!=='clients'&&k!=='messages') metaData[k]=data[k];
+    });
+    metaData.eodArchive = (metaData.eodArchive||[]).slice(0,30);
+    writes.push(_fbDb.ref('gamezlaw/meta').set(metaData));
+    await Promise.all(writes);
     setSyncStatus('ok','Synced ✓');
     return true;
   }catch(e){
@@ -1653,106 +1718,197 @@ async function cloudSet(data){
   }
 }
 
-function startMessagesListener(){
-  if(!_fbDb || _fbMsgListener) return;
-  _fbMsgListener = _fbDb.ref('gamezlaw/messages').on('value', snap=>{
-    const val = snap.val();
-    let msgs = [];
-    if(Array.isArray(val)){
-      msgs = val;
-    } else if(val && typeof val === 'object'){
-      msgs = Object.values(val);
+// ── ONE-TIME MIGRATION from old gamezlaw/data blob ──
+async function cloudMigrate(){
+  if(!_fbDb) return;
+  try{
+    var oldSnap = await _fbDb.ref('gamezlaw/data').once('value');
+    var old = oldSnap.val();
+    if(!old||!old.clients) return; // Already migrated or empty
+    var raw = old.clients;
+    var count = Array.isArray(raw) ? raw.length : Object.keys(raw).length;
+    console.log('GamezLaw: Migrating '+count+' clients to new paths…');
+    showLoading('Upgrading data structure\u2014one moment\u2026');
+    var normalized = normalizeAppData(old);
+    await cloudSet(normalized);
+    await _fbDb.ref('gamezlaw/data').remove();
+    console.log('GamezLaw: Migration complete \u2014 old blob removed');
+    hideLoading();
+  }catch(e){
+    console.warn('GamezLaw: Migration error',e);
+    hideLoading();
+  }
+}
+
+// ── FLUSH OFFLINE QUEUE — writes all local data after reconnect ──
+async function _flushOfflineQueue(){
+  if(!isSyncReady()) return;
+  _pendingOfflineSave = false;
+  try{
+    var writes = (appData.clients||[]).map(function(c){
+      return _fbDb.ref('gamezlaw/clients/'+c.id).set(c).catch(function(){});
+    });
+    writes.push(_fbDb.ref('gamezlaw/meta').set(buildMeta()).catch(function(){}));
+    await Promise.all(writes);
+    console.log('GamezLaw: Offline queue flushed');
+  }catch(e){
+    console.warn('GamezLaw: Queue flush failed',e);
+  }
+}
+
+// ── MAIN saveData() — smart granular routing ──
+// - When in client-detail view: writes only that client (fast path)
+// - When _specificClientDirty is set: writes that specific new client
+// - Always schedules a debounced meta save in background
+// - Queues offline writes and flushes when reconnected
+async function saveData(){
+  store.set(LOCAL_KEY, JSON.stringify(appData));
+  if(!isSyncReady()){ _pendingOfflineSave=true; return; }
+  setSyncStatus('syncing','Saving\u2026');
+  try{
+    var clientId = _specificClientDirty || state.currentClientId;
+    _specificClientDirty = null;
+    if(clientId){
+      var c = getClient(clientId);
+      if(c) await _fbDb.ref('gamezlaw/clients/'+clientId).set(c);
     }
-    appData.messages = msgs;
+    _scheduledMetaSave();
+    setSyncStatus('ok','Synced \u2713');
+    if(_pendingOfflineSave) _flushOfflineQueue();
+  }catch(e){
+    setSyncStatus('err','Sync failed');
+    _pendingOfflineSave = true;
+    console.warn('GamezLaw: saveData error',e);
+  }
+}
+
+// ── REAL-TIME LISTENERS ──
+function startMessagesListener(){
+  if(!_fbDb||_fbMsgListener) return;
+
+  // Messages channel (real-time push)
+  _fbMsgListener = _fbDb.ref('gamezlaw/messages').on('value',function(snap){
+    var val=snap.val();
+    var msgs=[];
+    if(Array.isArray(val)) msgs=val;
+    else if(val&&typeof val==='object') msgs=Object.values(val);
+    appData.messages=msgs;
     checkNewMessages();
     if(document.getElementById('msg-panel').style.display==='block') renderMessages();
-  }, err=>{ console.warn('FB msg listener err', err); });
-  // Also listen for task changes in real-time
-  _fbDb.ref('gamezlaw/data/attorneyTasks').on('value', snap=>{
-    const val=snap.val();
+  },function(err){ console.warn('FB msg listener err',err); });
+
+  // Attorney tasks — updated path from gamezlaw/data to gamezlaw/meta
+  _fbDb.ref('gamezlaw/meta/attorneyTasks').on('value',function(snap){
+    var val=snap.val();
     if(val) appData.attorneyTasks=Array.isArray(val)?val:Object.values(val);
     else appData.attorneyTasks=[];
     renderTaskList('attorney');
   });
-  _fbDb.ref('gamezlaw/data/secretaryTasks').on('value', snap=>{
-    const val=snap.val();
+
+  // Secretary tasks — updated path
+  _fbDb.ref('gamezlaw/meta/secretaryTasks').on('value',function(snap){
+    var val=snap.val();
     if(val) appData.secretaryTasks=Array.isArray(val)?val:Object.values(val);
     else appData.secretaryTasks=[];
     renderTaskList('secretary');
   });
-  // Ping listener
-  _fbDb.ref('gamezlaw/pings').on('value', function(){
-    checkPings();
+
+  // Clients — real-time sync replaces 60-second poll for client data
+  _fbDb.ref('gamezlaw/clients').on('value',function(snap){
+    var val=snap.val();
+    if(!val) return;
+    var incoming=Array.isArray(val)?val:Object.values(val);
+    if(!incoming.length) return;
+    var normalized=incoming.map(function(c){
+      if(!Array.isArray(c.events)) c.events=c.events?Object.values(c.events):[];
+      if(!Array.isArray(c.notes)) c.notes=c.notes?Object.values(c.notes):[];
+      if(!Array.isArray(c.charges)) c.charges=c.charges?Object.values(c.charges):[];
+      if(!Array.isArray(c.payments)) c.payments=c.payments?Object.values(c.payments):[];
+      if(!Array.isArray(c.cases)) c.cases=c.cases?Object.values(c.cases):[];
+      if(!Array.isArray(c.contacts)) c.contacts=c.contacts?Object.values(c.contacts):[];
+      if(c.commLog&&!Array.isArray(c.commLog)) c.commLog=Object.values(c.commLog);
+      if(c.discovery&&!Array.isArray(c.discovery)) c.discovery=Object.values(c.discovery);
+      return c;
+    });
+    appData.clients=normalized;
+    store.set(LOCAL_KEY,JSON.stringify(appData));
+    renderSidebarClients();
   });
+
+  // Connectivity — flush offline queue when Firebase reconnects
+  _fbDb.ref('.info/connected').on('value',function(snap){
+    if(snap.val()===true&&_pendingOfflineSave) _flushOfflineQueue();
+  });
+
+  // Pings
+  _fbDb.ref('gamezlaw/pings').on('value',function(){ checkPings(); });
 }
 
 async function initFirebase(config){
-  // Wait for Firebase SDK to load (Safari can be slow)
-  let attempts=0;
+  var attempts=0;
   while(typeof firebase==='undefined'&&attempts<20){
-    await new Promise(r=>setTimeout(r,200));
+    await new Promise(function(r){setTimeout(r,200);});
     attempts++;
   }
   if(typeof firebase==='undefined'){
-    return 'ERROR: Firebase SDK not loaded — check internet connection';
+    return 'ERROR: Firebase SDK not loaded \u2014 check internet connection';
   }
   try{
-    if(firebase.apps && firebase.apps.length){
-      await Promise.all(firebase.apps.map(a=>a.delete()));
+    if(firebase.apps&&firebase.apps.length){
+      await Promise.all(firebase.apps.map(function(a){return a.delete();}));
     }
-    _fbApp = firebase.initializeApp(config);
-    _fbDb  = firebase.database(_fbApp);
+    _fbApp=firebase.initializeApp(config);
+    _fbDb=firebase.database(_fbApp);
     await _fbDb.ref('.info/connected').once('value');
     return true;
   }catch(e){
-    console.warn('Firebase init error:', e);
-    _fbDb = null; _fbApp = null;
-    return 'ERROR: ' + (e.message||e.code||String(e));
+    console.warn('Firebase init error:',e);
+    _fbDb=null; _fbApp=null;
+    return 'ERROR:'+(e.message||e.code||String(e));
   }
 }
 
 let settings = {};
 try { settings = JSON.parse(store.get(SETTINGS_KEY)||'{}'); } catch(e){}
 
-function setSyncStatus(st, msg){
-  const dot = document.getElementById('sync-dot');
-  const lbl = document.getElementById('sync-label');
-  if(dot) dot.className = 'sync-dot ' + (st||'');
-  if(lbl) lbl.textContent = msg;
+function setSyncStatus(st,msg){
+  var dot=document.getElementById('sync-dot');
+  var lbl=document.getElementById('sync-label');
+  if(dot) dot.className='sync-dot '+(st||'');
+  if(lbl) lbl.textContent=msg;
 }
 
 function showLoading(msg){
-  document.getElementById('loading-msg').textContent = msg||'Syncing…';
+  document.getElementById('loading-msg').textContent=msg||'Syncing\u2026';
   document.getElementById('loading-overlay').classList.add('show');
 }
 function hideLoading(){ document.getElementById('loading-overlay').classList.remove('show'); }
 
-async function saveData(){
-  store.set(LOCAL_KEY, JSON.stringify(appData));
-  if(isSyncReady()) await cloudSet(appData);
-}
-
 async function refreshFromCloud(){
   if(!isSyncReady()) return;
-  setSyncStatus('syncing','Loading…');
-  const d = await cloudGet();
-  if(d && d.clients){
-    // Preserve courts if cloud has none but local does
-    if((!d.courts||!d.courts.length) && appData.courts && appData.courts.length){
+  setSyncStatus('syncing','Loading\u2026');
+  var d=await cloudGet();
+  if(d){
+    if((!d.courts||!d.courts.length)&&appData.courts&&appData.courts.length){
       d.courts=appData.courts;
     }
     var localArchive=appData.messageArchive||[];
     if(d.messageArchive&&d.messageArchive.length){
       var archIds=new Set(d.messageArchive.map(function(m){return m.id;}));
-      localArchive.forEach(function(m){ if(!archIds.has(m.id)){ d.messageArchive.push(m); archIds.add(m.id); } });
-    } else { d.messageArchive=localArchive; }
+      localArchive.forEach(function(m){
+        if(!archIds.has(m.id)){d.messageArchive.push(m);archIds.add(m.id);}
+      });
+    } else {
+      d.messageArchive=localArchive;
+    }
     var archivedIds=new Set((d.messageArchive||[]).map(function(m){return m.id;}));
     if(d.messages) d.messages=d.messages.filter(function(m){return !archivedIds.has(m.id);});
-    appData = d;
-    store.set(LOCAL_KEY, JSON.stringify(d));
-    setSyncStatus('ok','Synced ✓');
+    appData=d;
+    store.set(LOCAL_KEY,JSON.stringify(d));
+    setSyncStatus('ok','Synced \u2713');
+  } else {
+    setSyncStatus('err','Sync error');
   }
-  else { setSyncStatus('err','Sync error'); }
 }
 
 function showSetupError(msg){
@@ -2729,7 +2885,7 @@ async function resetCourtDirectory(){
   appData.courts=courts;
   // Save directly to Firebase courts ref AND full data
   if(_fbDb){
-    try{ await _fbDb.ref('gamezlaw/data/courts').set(courts); }catch(e){ console.warn(e); }
+    try{ await _fbDb.ref('gamezlaw/meta/courts').set(courts); }catch(e){ console.warn(e); }
   }
   await saveData();
   showToast('✅ '+courts.length+' Bexar County courts loaded!');
@@ -3414,7 +3570,7 @@ async function cycleTaskStatus(box,idx){
         t.statusUpdatedBy=currentRole==='attorney'?'J. Mario Gámez':'Claudia';
         t.statusDate=todayStr();
         saveData().then(function(){ renderTaskList(box); });
-        if(_fbDb){ try{ _fbDb.ref('gamezlaw/data/'+(box==='attorney'?'attorneyTasks':'secretaryTasks')).set(tasks); }catch(e){} }
+        if(_fbDb){ try{ _fbDb.ref('gamezlaw/meta/'+(box==='attorney'?'attorneyTasks':'secretaryTasks')).set(tasks); }catch(e){} }
       }, 480);
       return;
     }
@@ -3422,7 +3578,7 @@ async function cycleTaskStatus(box,idx){
   t.status=newStatus;
   t.statusUpdatedBy=currentRole==='attorney'?'J. Mario Gámez':'Claudia';
   t.statusDate=todayStr();
-  if(_fbDb){ try{ await _fbDb.ref('gamezlaw/data/'+(box==='attorney'?'attorneyTasks':'secretaryTasks')).set(tasks); }catch(e){} }
+  if(_fbDb){ try{ await _fbDb.ref('gamezlaw/meta/'+(box==='attorney'?'attorneyTasks':'secretaryTasks')).set(tasks); }catch(e){} }
   await saveData();
   renderTaskList(box);
 }
@@ -3595,7 +3751,7 @@ async function saveTask(box){
   const newTask={id:uid(),text,addedBy,date:todayStr(),status:''};
   tasks.push(newTask);
   // Write to Firebase immediately for real-time delivery
-  if(_fbDb){ try{ await _fbDb.ref('gamezlaw/data/'+(box==='attorney'?'attorneyTasks':'secretaryTasks')).set(tasks); }catch(e){} }
+  if(_fbDb){ try{ await _fbDb.ref('gamezlaw/meta/'+(box==='attorney'?'attorneyTasks':'secretaryTasks')).set(tasks); }catch(e){} }
   await saveData();
   closeModal();
   renderTaskList(box);
@@ -3641,6 +3797,7 @@ async function saveImportedClosedCase(){
   }
   if(!appData.clients) appData.clients=[];
   appData.clients.push(client);
+  _specificClientDirty=client.id;
   // Sort alphabetically by name
   appData.clients.sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
   await saveData();
@@ -3669,8 +3826,8 @@ async function archiveCompletedTasks(box){
   if(box==='attorney') appData.attorneyTasks=appData.attorneyTasks.filter(function(t){return t.status!=='done';});
   else appData.secretaryTasks=appData.secretaryTasks.filter(function(t){return t.status!=='done';});
   if(_fbDb){ try{
-    await _fbDb.ref('gamezlaw/data/'+(box==='attorney'?'attorneyTasks':'secretaryTasks')).set(box==='attorney'?appData.attorneyTasks:appData.secretaryTasks);
-    await _fbDb.ref('gamezlaw/data/taskArchive').set(appData.taskArchive);
+    await _fbDb.ref('gamezlaw/meta/'+(box==='attorney'?'attorneyTasks':'secretaryTasks')).set(box==='attorney'?appData.attorneyTasks:appData.secretaryTasks);
+    await _fbDb.ref('gamezlaw/meta/taskArchive').set(appData.taskArchive);
   }catch(e){} }
   await saveData();
   renderTaskList(box);
@@ -3725,8 +3882,8 @@ async function deleteTask(box,idx){
   appData.taskArchive.push(archived);
   tasks.splice(idx,1);
   if(_fbDb){ try{
-    await _fbDb.ref('gamezlaw/data/'+(box==='attorney'?'attorneyTasks':'secretaryTasks')).set(tasks);
-    await _fbDb.ref('gamezlaw/data/taskArchive').set(appData.taskArchive);
+    await _fbDb.ref('gamezlaw/meta/'+(box==='attorney'?'attorneyTasks':'secretaryTasks')).set(tasks);
+    await _fbDb.ref('gamezlaw/meta/taskArchive').set(appData.taskArchive);
   }catch(e){} }
   await saveData();
   renderTaskList(box);
@@ -5825,6 +5982,7 @@ async function importElawSection(section){
       if(p.address)target.address=p.address;if(p.sid)target.sid=p.sid;if(p.dl)target.dl=p.dl;
       if(p.immigrationStatus)target.immigrationStatus=p.immigrationStatus;
     }
+    if(target) _specificClientDirty=target.id;
     await saveData();renderSidebarClients();
     elawStatus(section,'Imported: '+(target?target.name:'new client'),true);
     elawLog('Client info: '+(target?target.name:''));
@@ -7124,6 +7282,7 @@ async function saveNewClient(){
   if(totalFee>0) nc.charges.push({id:uid(),date:todayStr(),desc:ft==='flat'?'Flat fee — '+nc.charge:`Hourly fee (${hoursLogged} hrs @ $${hourlyRate}/hr)`,amount:totalFee});
   if(initPay>0) nc.payments.push({id:uid(),date:todayStr(),desc:'Initial payment',method:'',amount:initPay});
   appData.clients.push(nc);
+  _specificClientDirty=nc.id;
   await saveData();
   closeModal();
   renderSidebarClients();
@@ -9275,7 +9434,7 @@ async function deleteMessage(msgId){
     toArchive.archivedBy=currentRole;
     appData.messageArchive.push(toArchive);
   }
-  if(_fbDb){ try{ await _fbDb.ref('gamezlaw/messages').set(appData.messages); await _fbDb.ref('gamezlaw/data/messageArchive').set(appData.messageArchive); }catch(e){} }
+  if(_fbDb){ try{ await _fbDb.ref('gamezlaw/messages').set(appData.messages); await _fbDb.ref('gamezlaw/meta/messageArchive').set(appData.messageArchive); }catch(e){} }
   await saveData();
   renderMessages();
   showToast('Message archived');
@@ -10105,7 +10264,7 @@ async function init(){
 
   // Show PIN lock first
   if(!isAppUnlocked()){
-    await new Promise(resolve=>{
+    await new Promise(function(resolve){
       _lockResolve=resolve;
       showAppLock('Enter PIN to continue');
     });
@@ -10113,9 +10272,14 @@ async function init(){
 
   // Connect to Firebase automatically
   setSyncStatus('syncing','Connecting…');
-  const ok = await initFirebase(BAKED_FB_CONFIG);
-  if(ok){ setSyncStatus('ok','Synced ✓'); }
-  else { setSyncStatus('err','Reconnect in Settings'); }
+  var ok = await initFirebase(BAKED_FB_CONFIG);
+  if(ok){
+    // One-time migration from old gamezlaw/data blob to granular paths
+    await cloudMigrate();
+    setSyncStatus('ok','Synced ✓');
+  } else {
+    setSyncStatus('err','Reconnect in Settings');
+  }
 
   // Launch app
   await init();
