@@ -67,6 +67,8 @@ body{font-family:'DM Sans',sans-serif;background:#000000;color:var(--text);displ
 #view-settings{--page-color:#94a3b8;}
 #view-closed-files{--page-color:#f97316;}
 #view-leads{--page-color:#a78bfa;}
+#view-queue{--page-color:#fb923c;}
+#view-queue.active .card{border:3px solid #fb923c !important;box-shadow:0 0 10px rgba(0,0,0,0.3);}
 
 /* Override card borders per page */
 /* Dashboard - orange cards */
@@ -698,6 +700,7 @@ body{font-family:'DM Sans',sans-serif;background:#000000;color:var(--text);displ
   <div class="nav-item" onclick="showView('finance')">Finances</div>
   <div class="nav-item" onclick="showView('notes-view')">Notes</div>
   <div class="nav-item" onclick="showView('letters')">Letters</div>
+  <div class="nav-item" onclick="showView('queue')" style="position:relative;">Queue<span id="queue-badge" style="position:absolute;top:6px;right:4px;background:#f87171;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:10px;min-width:14px;text-align:center;display:none;"></span></div>
   <div class="nav-item" onclick="showView('leads')">Leads</div>
   <div class="nav-item" onclick="showView('help')">Guide</div>
   <div class="nav-item" onclick="showView('settings')">Settings</div>
@@ -929,6 +932,27 @@ body{font-family:'DM Sans',sans-serif;background:#000000;color:var(--text);displ
     </div>
     <div id="workflow-guide-content">
     ${buildWorkflowGuideHTML()}
+    </div>
+  </div>
+</div>
+
+<div id="view-queue" class="view">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+    <div>
+      <div style="font-family:'DM Serif Display',serif;font-size:20px;color:#fb923c;">Letters Queue</div>
+      <div style="font-size:12px;color:#7a6a9a;margin-top:2px;">Auto-drafted payment reminders — review and send, nothing goes out without your approval</div>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-ghost btn-sm" onclick="renderQueueView()" style="border-color:rgba(251,146,60,0.4);color:#fb923c;">↻ Refresh</button>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:14px;border-color:rgba(251,146,60,0.3);">
+    <div class="card-header" style="background:rgba(251,146,60,0.06);">
+      <span class="card-title">📬 Pending Letters</span>
+      <span style="font-size:11px;color:rgba(255,255,255,0.35);">7+ days past payment plan date · Review before sending</span>
+    </div>
+    <div style="padding:14px;">
+      <div id="queue-list"><div style="text-align:center;padding:30px;color:#4a9edd;font-size:13px;">Loading queue…</div></div>
     </div>
   </div>
 </div>
@@ -3463,15 +3487,15 @@ function showView(v, clientId){
   const viewId=v==='client-detail'?'view-client-detail':'view-'+v;
   const viewEl=document.getElementById(viewId);
   if(viewEl) viewEl.classList.add('active');
-  const navMap={dashboard:0,clients:1,calendar:2,finance:3,'notes-view':4,letters:5,leads:6,help:7,settings:8};
+  const navMap={dashboard:0,clients:1,calendar:2,finance:3,'notes-view':4,letters:5,queue:6,leads:7,help:8,settings:9};
   if(v in navMap) document.querySelectorAll('.nav-item')[navMap[v]]?.classList.add('active');
-  const titles={dashboard:'Dashboard',clients:'All Clients',calendar:'Court Calendar',finance:'Finances','notes-view':'All Notes',letters:'Letters & Correspondence',settings:'Settings'};
+  const titles={dashboard:'Dashboard',clients:'All Clients',calendar:'Court Calendar',finance:'Finances','notes-view':'All Notes',letters:'Letters & Correspondence',queue:'Letters Queue',leads:'Leads',settings:'Settings'};
   document.getElementById('topbar-title').textContent=v==='client-detail'&&clientId?(getClient(clientId)?.name||'Client'):(titles[v]||'');
   if(v==='client-detail'&&clientId){
     const chip=document.querySelector(`.client-chip[data-id="${clientId}"]`);
     if(chip){ chip.classList.add('active'); chip.scrollIntoView({behavior:'smooth',inline:'nearest',block:'nearest'}); }
   }
-  const renders={dashboard:renderDashboard,clients:()=>renderClientList(state.alphaFilter),calendar:renderCalendar,finance:renderFinance,'notes-view':renderNotesView,letters:renderLetters,settings:renderSettings,leads:renderLeads,help:renderHelp,'import-closed':function(){}};
+  const renders={dashboard:renderDashboard,clients:()=>renderClientList(state.alphaFilter),calendar:renderCalendar,finance:renderFinance,'notes-view':renderNotesView,letters:renderLetters,queue:renderQueueView,settings:renderSettings,leads:renderLeads,help:renderHelp,'import-closed':function(){}};
   if(renders[v]) renders[v]();
   else if(v==='client-detail'&&clientId){
     renderClientDetail(clientId);
@@ -8266,6 +8290,354 @@ document.addEventListener('keydown',e=>{
 });
 
 // ══════════════════════════════════════════════════════════
+//  LETTERS QUEUE — Auto-drafted payment reminder letters
+//  Scans payment plans daily, drafts letters for 7+ day
+//  overdue installments. Nothing sends without attorney review.
+//  Level 1 (7-20 days): soft tone
+//  Level 2 (21+ days): escalated tone + Account in Jeopardy
+// ══════════════════════════════════════════════════════════
+var QUEUE_STATE_KEY = 'gamezlaw_queue_state';
+var _queueItems = [];
+
+function _getQueueState(){
+  try{ return JSON.parse(store.get(QUEUE_STATE_KEY)||'{}'); }catch(e){ return {}; }
+}
+function _setQueueState(s){ store.set(QUEUE_STATE_KEY,JSON.stringify(s)); }
+
+function buildLetterQueue(){
+  var today = todayStr();
+  var qs = _getQueueState();
+  var items = [];
+  (appData.clients||[]).forEach(function(c){
+    if((c.status||'active')==='closed') return;
+    var plan = c.paymentPlan||[];
+    if(!plan.length) return;
+    plan.forEach(function(p){
+      if(p.paid||!p.date) return;
+      var daysOverdue = Math.floor(
+        (new Date(today+'T12:00:00') - new Date(p.date+'T12:00:00')) / 86400000
+      );
+      if(daysOverdue < 7) return;
+      var key = String(c.id)+'_'+p.date;
+      var qst = qs[key];
+      if(qst && qst.action==='skipped') return;
+      if(qst && qst.action==='snoozed' && qst.until>=today) return;
+      if(qst && qst.action==='sent') return;
+      var totalPastDue = plan.filter(function(x){
+        return !x.paid && x.date && x.date < today;
+      }).reduce(function(s,x){ return s+(x.amount||0); }, 0);
+      var level = daysOverdue>=21 ? 2 : 1;
+      items.push({
+        key: key,
+        clientId: c.id,
+        clientName: c.name,
+        clientEmail: c.email||'',
+        clientPhone: c.phone||'',
+        installmentDate: p.date,
+        installmentAmount: p.amount||0,
+        totalPastDue: totalPastDue,
+        daysOverdue: daysOverdue,
+        level: level
+      });
+    });
+  });
+  items.sort(function(a,b){ return b.daysOverdue - a.daysOverdue; });
+  _queueItems = items;
+  return items;
+}
+
+function updateQueueBadge(){
+  var items = buildLetterQueue();
+  var badge = document.getElementById('queue-badge');
+  if(!badge) return;
+  if(items.length > 0){
+    badge.textContent = String(items.length);
+    badge.style.display = 'block';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function renderQueueView(){
+  var items = buildLetterQueue();
+  updateQueueBadge();
+  var el = document.getElementById('queue-list');
+  if(!el) return;
+  if(!items.length){
+    el.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#4a9edd;">'
+      + '<div style="font-size:40px;margin-bottom:12px;">\u2705</div>'
+      + '<div style="font-size:16px;font-weight:600;color:#fff;margin-bottom:6px;">Queue is clear</div>'
+      + '<div style="font-size:13px;opacity:0.6;">No payment plan installments are 7+ days overdue</div>'
+      + '</div>';
+    return;
+  }
+  var html = '';
+  items.forEach(function(item){
+    var hasEmail = !!item.clientEmail;
+    var levelColor = item.level===2 ? '#f87171' : '#fbbf24';
+    var levelLabel = item.level===2 ? '\uD83D\uDD34 Escalated' : '\uD83D\uDFE1 First Notice';
+    var borderCol = item.level===2 ? 'rgba(248,113,113,0.5)' : 'rgba(251,191,36,0.4)';
+    var hdrBg = item.level===2 ? 'rgba(248,113,113,0.06)' : 'rgba(251,191,36,0.05)';
+    var stampDefault = item.level===2 ? 'jeopardy' : 'pastdue';
+    var safeKey = escHtml(item.key);
+
+    html += '<div class="card" style="margin-bottom:14px;border-color:'+borderCol+';animation:fadeSlideIn .3s ease both;" id="qcard-'+safeKey+'">';
+
+    // Header row
+    html += '<div class="card-header" style="background:'+hdrBg+';flex-wrap:wrap;gap:8px;">';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">';
+    html += '<span style="font-size:15px;font-weight:700;color:#fff;">'+escHtml(item.clientName)+'</span>';
+    html += '<span style="font-size:11px;font-weight:700;color:'+levelColor+';background:rgba(0,0,0,0.3);padding:2px 8px;border-radius:10px;border:1px solid '+levelColor+';">'+levelLabel+'</span>';
+    if(!hasEmail) html += '<span style="font-size:11px;font-weight:700;color:#f97316;background:rgba(249,115,22,0.12);padding:2px 8px;border-radius:10px;border:1px solid rgba(249,115,22,0.4);">\uD83D\uDCDE No Email \u2014 Call Instead</span>';
+    html += '</div>';
+    html += '<div style="font-size:12px;color:#4a9edd;margin-top:3px;">';
+    html += item.daysOverdue+' days overdue \u00b7 Installment: '+fmtMoney(item.installmentAmount)+' due '+fmtDate(item.installmentDate);
+    html += '</div></div>';
+    html += '<div style="font-family:\'DM Serif Display\',serif;font-size:20px;color:'+levelColor+';">'+fmtMoney(item.totalPastDue)+'</div>';
+    html += '</div>';
+
+    // Body
+    html += '<div style="padding:14px 20px;display:flex;flex-direction:column;gap:12px;">';
+
+    // Stamp + preview row
+    html += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">';
+    html += '<div style="display:flex;align-items:center;gap:6px;">';
+    html += '<span style="font-size:11px;color:#4a9edd;text-transform:uppercase;letter-spacing:0.6px;">Stamp:</span>';
+    html += '<select id="stamp-'+safeKey+'" style="background:#0c1630;color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:4px 8px;font-size:12px;">';
+    html += '<option value="none">None</option>';
+    html += '<option value="pastdue"'+(stampDefault==='pastdue'?' selected':'')+'>Past Due</option>';
+    html += '<option value="jeopardy"'+(stampDefault==='jeopardy'?' selected':'')+'>Account in Jeopardy</option>';
+    html += '</select></div>';
+    html += '<button onclick="toggleQueuePreview(\''+safeKey+'\')" id="prev-btn-'+safeKey+'" style="background:transparent;border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:#a8d8f8;font-size:11px;padding:4px 10px;cursor:pointer;">\uD83D\uDC41 Preview Letter</button>';
+    html += '</div>';
+
+    // Preview pane (hidden)
+    html += '<div id="qpreview-'+safeKey+'" style="display:none;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:14px;font-size:12px;color:#a8d8f8;line-height:1.8;max-height:280px;overflow-y:auto;white-space:pre-wrap;">'+escHtml(_buildQueueLetterText(item))+'</div>';
+
+    // Action buttons
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;">';
+    if(hasEmail){
+      html += '<button onclick="sendQueueLetter(\''+safeKey+'\')" id="send-btn-'+safeKey+'" style="flex:1;background:#4ade80;color:#000;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;min-width:120px;">\uD83D\uDCE8 Send Letter</button>';
+    } else {
+      html += '<button onclick="markQueueCalled(\''+safeKey+'\','+item.clientId+')" style="flex:1;background:#f97316;color:#000;border:none;border-radius:8px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;min-width:120px;">\uD83D\uDCDE Log Call Made</button>';
+    }
+    html += '<button onclick="snoozeQueueItem(\''+safeKey+'\')" style="background:transparent;border:1px solid rgba(251,191,36,0.4);color:#fbbf24;border-radius:8px;padding:9px 14px;font-size:12px;cursor:pointer;" title="Snooze 7 days">\u23F1 Snooze 7d</button>';
+    html += '<button onclick="skipQueueItem(\''+safeKey+'\')" style="background:transparent;border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.4);border-radius:8px;padding:9px 14px;font-size:12px;cursor:pointer;" title="Remove from queue">\u2715 Skip</button>';
+    html += '</div>';
+
+    html += '</div></div>'; // end body + card
+  });
+  el.innerHTML = html;
+}
+
+function toggleQueuePreview(key){
+  var prev = document.getElementById('qpreview-'+key);
+  var btn = document.getElementById('prev-btn-'+key);
+  if(!prev) return;
+  var visible = prev.style.display !== 'none';
+  prev.style.display = visible ? 'none' : 'block';
+  if(btn) btn.textContent = visible ? '\uD83D\uDC41 Preview Letter' : '\uD83D\uDE48 Hide Preview';
+}
+
+function _buildQueueLetterText(item){
+  var name = item.clientName;
+  var date = fmtDate(item.installmentDate);
+  var amt = fmtMoney(item.installmentAmount);
+  var total = fmtMoney(item.totalPastDue);
+  if(item.level===1){
+    return 'Dear '+name+',\n\n'
+      +'We hope this message finds you well. We are reaching out regarding a scheduled payment of '
+      +amt+' that was due on '+date+'.\n\n'
+      +'We understand that life can make it difficult to keep up with scheduled payments, and we want '
+      +'to work with you. If you have already made arrangements or if there is something we should '
+      +'be aware of, please do not hesitate to contact our office.\n\n'
+      +'ACCOUNT SUMMARY\n'
+      +'  Scheduled payment:  '+amt+' (due '+date+')\n'
+      +'  Total past due:     '+total+'\n\n'
+      +'To bring your account current:\n'
+      +'  Pay Online:  https://square.link/u/UaQ5q8Qp\n'
+      +'  Zelle:       (210) 240-9200\n'
+      +'  By Phone:    (210) 222-0500 — ask for Claudia\n\n'
+      +'Please contact our office if you have any questions or would like to discuss your account.\n\n'
+      +'Sincerely,\n\nJ. Mario Gamez, Attorney at Law\n'
+      +'Law Office of J. Mario Gamez\n'
+      +'816 Camaron, Suite 1.25 | San Antonio, Texas 78212\n'
+      +'(210) 222-0500';
+  }
+  return 'Dear '+name+',\n\n'
+    +'This letter serves as formal notice that your account with our office is significantly '
+    +'past due. Your scheduled payment of '+amt+' was due on '+date+' and remains outstanding.\n\n'
+    +'PAST DUE NOTICE\n'
+    +'  Total past due:  '+total+'\n'
+    +'  Days overdue:    '+item.daysOverdue+'\n\n'
+    +'Please contact our office immediately to make arrangements. Failure to bring your account '
+    +'current may affect our ability to continue your legal representation.\n\n'
+    +'PAYMENT OPTIONS:\n'
+    +'  Pay Online:  https://square.link/u/UaQ5q8Qp\n'
+    +'  Zelle:       (210) 240-9200\n'
+    +'  By Phone:    (210) 222-0500\n\n'
+    +'Sincerely,\n\nJ. Mario Gamez, Attorney at Law\n'
+    +'Law Office of J. Mario Gamez\n'
+    +'816 Camaron, Suite 1.25 | San Antonio, Texas 78212\n'
+    +'(210) 222-0500';
+}
+
+function _buildQueueLetterHtml(item, stamp){
+  var name = escHtml(item.clientName);
+  var date = fmtDate(item.installmentDate);
+  var amt = fmtMoney(item.installmentAmount);
+  var total = fmtMoney(item.totalPastDue);
+  var borderCol = item.level===2 ? '#c0392b' : '#c8a96e';
+  var sentDate = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+
+  var body = '<div style="font-family:Georgia,serif;max-width:580px;margin:0 auto;padding:32px 24px;color:#222;">';
+
+  // Letterhead
+  body += '<div style="display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #0d2640;padding-bottom:14px;margin-bottom:24px;">';
+  body += '<div><div style="font-size:22px;font-weight:700;color:#0d2640;">J. Mario G\u00e1mez</div>';
+  body += '<div style="font-size:11px;color:#999;letter-spacing:0.5px;">Attorney at Law</div></div>';
+  body += '<div style="text-align:right;"><div style="font-size:11px;color:#999;">'+sentDate+'</div>';
+  body += '<div style="font-size:11px;color:#999;">(210) 222-0500</div></div>';
+  body += '</div>';
+
+  body += '<p style="margin:0 0 16px;">Dear '+name+',</p>';
+
+  if(item.level===1){
+    body += '<p style="margin:0 0 16px;line-height:1.8;">We hope this message finds you well. We are reaching out regarding a scheduled payment of <strong>'+amt+'</strong> that was due on <strong>'+date+'</strong>.</p>';
+    body += '<p style="margin:0 0 16px;line-height:1.8;">We understand that life can make it difficult to keep up with scheduled payments, and we want to work with you. If you have already made arrangements or if there is something we should be aware of, please do not hesitate to contact our office.</p>';
+  } else {
+    body += '<p style="margin:0 0 16px;line-height:1.8;">This letter serves as formal notice that your account with our office is significantly past due. Your scheduled payment of <strong>'+amt+'</strong> was due on <strong>'+date+'</strong> and remains outstanding.</p>';
+    body += '<p style="margin:0 0 16px;line-height:1.8;">It is important that you contact our office immediately to make arrangements. Failure to bring your account current may affect our ability to continue your legal representation.</p>';
+  }
+
+  // Stamp block
+  if(stamp==='pastdue'){
+    body += '<div style="text-align:center;margin:20px 0;"><div style="display:inline-block;border:3px solid #c0392b;border-radius:6px;padding:7px 18px;font-family:Georgia,serif;font-size:15px;font-weight:700;color:#c0392b;letter-spacing:3px;text-transform:uppercase;transform:rotate(-10deg);opacity:0.85;">PAST DUE</div></div>';
+  } else if(stamp==='jeopardy'){
+    body += '<div style="text-align:center;margin:20px 0;"><div style="display:inline-block;border:3px solid #7b0000;border-radius:6px;padding:7px 18px;font-family:Georgia,serif;font-size:13px;font-weight:700;color:#7b0000;letter-spacing:2px;text-transform:uppercase;transform:rotate(-10deg);opacity:0.85;">ACCOUNT IN JEOPARDY</div></div>';
+  }
+
+  // Account summary
+  body += '<div style="background:#f8f8f8;border-left:4px solid '+borderCol+';border-radius:0 6px 6px 0;padding:16px 20px;margin:20px 0;">';
+  body += '<div style="font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:#999;margin-bottom:10px;">Account Summary</div>';
+  body += '<div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;"><span>Scheduled payment ('+date+')</span><span>'+amt+'</span></div>';
+  if(item.level===2){
+    body += '<div style="font-size:12px;color:#999;margin-bottom:4px;">Days overdue: '+item.daysOverdue+'</div>';
+  }
+  body += '<div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700;color:#c0392b;border-top:1px solid #ddd;padding-top:8px;margin-top:8px;"><span>Total Past Due</span><span>'+total+'</span></div>';
+  body += '</div>';
+
+  // Payment options
+  body += '<p style="margin:0 0 10px;font-size:13px;font-weight:600;">Payment Options:</p>';
+  body += '<div style="background:#f0f7ff;border-radius:6px;padding:14px 16px;margin-bottom:20px;font-size:13px;line-height:2;">';
+  body += '<div><a href="https://square.link/u/UaQ5q8Qp" style="color:#1a3a6b;font-weight:600;">Pay Online (Square)</a> &mdash; Visa, MC, AmEx, Apple Pay</div>';
+  body += '<div><strong>Zelle:</strong> (210) 240-9200</div>';
+  body += '<div><strong>Phone:</strong> (210) 222-0500 &mdash; ask for Claudia</div>';
+  body += '</div>';
+
+  body += '<p style="margin:0 0 24px;line-height:1.8;font-size:13px;">If you have any questions or would like to discuss your account, please do not hesitate to reach out.</p>';
+
+  // Signature
+  body += '<div style="margin-top:24px;border-top:1px solid #eee;padding-top:20px;">';
+  body += '<div style="font-size:13px;margin-bottom:10px;">Sincerely,</div>';
+  body += '<div style="font-size:16px;font-weight:700;color:#0d2640;margin-bottom:2px;">J. Mario G\u00e1mez</div>';
+  body += '<div style="font-size:12px;color:#666;">Attorney at Law</div>';
+  body += '<div style="font-size:12px;color:#666;">Law Office of J. Mario G\u00e1mez</div>';
+  body += '<div style="font-size:12px;color:#999;margin-top:6px;">816 Camaron, Suite 1.25 \u00b7 San Antonio, Texas 78212</div>';
+  body += '<div style="font-size:12px;color:#999;">(210) 222-0500</div>';
+  body += '</div></div>';
+  return body;
+}
+
+async function sendQueueLetter(key){
+  var item = _queueItems.find(function(i){ return i.key===key; });
+  if(!item){ showToast('Item not found'); return; }
+  if(!item.clientEmail){ showToast('No email on file'); return; }
+  var c = getClient(item.clientId);
+  if(!c){ showToast('Client not found'); return; }
+  var stampEl = document.getElementById('stamp-'+key);
+  var stamp = stampEl ? stampEl.value : 'none';
+  var subject = item.level===2
+    ? 'URGENT: Past Due Account Notice \u2014 G\u00c1MEZ LAW'
+    : 'Payment Reminder \u2014 G\u00c1MEZ LAW';
+  var btn = document.getElementById('send-btn-'+key);
+  if(btn){ btn.textContent = 'Sending\u2026'; btn.disabled = true; }
+  var htmlBody = _buildQueueLetterHtml(item, stamp);
+  try{
+    await emailjs.send(EMAILJS_SERVICE,EMAILJS_TEMPLATE,{
+      client_name: item.clientName,
+      client_email: item.clientEmail,
+      email_subject: subject,
+      receipt_body: htmlBody
+    });
+    await emailjs.send(EMAILJS_SERVICE,EMAILJS_TEMPLATE,{
+      client_name: 'CC \u2014 '+item.clientName,
+      client_email: 'gamez4@aol.com',
+      email_subject: 'CC: '+subject,
+      receipt_body: htmlBody
+    });
+    if(!c.commLog) c.commLog = [];
+    c.commLog.push({
+      id: uid(),
+      type: item.level===2 ? 'Past Due Notice (Escalated)' : 'Past Due Notice',
+      date: todayStr(),
+      by: currentRole==='attorney' ? 'J. Mario G\u00e1mez' : 'Claudia',
+      note: 'Payment reminder sent. Past due: '+fmtMoney(item.totalPastDue)+'. Stamp: '+stamp+'.'
+    });
+    await saveData();
+    var qs = _getQueueState();
+    qs[key] = { action:'sent', sentDate:todayStr() };
+    _setQueueState(qs);
+    showToast('Letter sent to '+item.clientEmail+' \u2014 CC sent to attorney');
+    var card = document.getElementById('qcard-'+key);
+    if(card){ card.style.transition='opacity .4s'; card.style.opacity='0'; setTimeout(function(){ renderQueueView(); },450); }
+  }catch(e){
+    showToast('Send failed \u2014 check connection');
+    if(btn){ btn.textContent = '\uD83D\uDCE8 Send Letter'; btn.disabled = false; }
+    console.warn('Queue send error:',e);
+  }
+}
+
+async function markQueueCalled(key, clientId){
+  var c = getClient(clientId);
+  if(!c){ showToast('Client not found'); return; }
+  if(!c.commLog) c.commLog = [];
+  c.commLog.push({
+    id: uid(),
+    type: 'Call \u2014 Payment Follow-up',
+    date: todayStr(),
+    by: currentRole==='attorney' ? 'J. Mario G\u00e1mez' : 'Claudia',
+    note: 'Called regarding past due balance. No email on file.'
+  });
+  await saveData();
+  var qs = _getQueueState();
+  qs[key] = { action:'sent', sentDate:todayStr() };
+  _setQueueState(qs);
+  showToast('Call logged to communication log');
+  renderQueueView();
+}
+
+function snoozeQueueItem(key){
+  var qs = _getQueueState();
+  var d = new Date(); d.setDate(d.getDate()+7);
+  qs[key] = { action:'snoozed', until:d.toISOString().slice(0,10) };
+  _setQueueState(qs);
+  showToast('Snoozed 7 days');
+  renderQueueView();
+}
+
+function skipQueueItem(key){
+  showConfirm('Skip this letter?','It will be removed from the queue permanently.',function(){
+    var qs = _getQueueState();
+    qs[key] = { action:'skipped' };
+    _setQueueState(qs);
+    renderQueueView();
+    showToast('Removed from queue');
+  });
+}
+
+// ══════════════════════════════════════════════════════════
 //  LETTERS SYSTEM
 // ══════════════════════════════════════════════════════════
 const LETTER_TEMPLATES = [
@@ -10233,6 +10605,7 @@ async function init(){
   setTimeout(()=>renderSidebarClients(), 100);
   renderDashboard();
   checkNewMessages();
+  updateQueueBadge();
   setTimeout(()=>checkCourtReminders(), 3000); // Check after app loads
   setTimeout(function(){ if(currentRole!=='attorney') checkUpcomingCourtBanner(); }, 2500); // Banner for Secretary only
   setTimeout(function(){ if(currentRole!=='attorney') sendDailySummaryToClaudia(); }, 4000); // Daily briefing for Claudia
