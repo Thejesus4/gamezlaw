@@ -355,6 +355,14 @@ body{font-family:'DM Sans',sans-serif;background:#000000;color:var(--text);displ
 .form-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .form-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 .form-hint{font-size:11px;color:#4a9edd;margin-top:5px}
+.dp-day{text-align:center;padding:7px 2px;border-radius:5px;font-size:12px;cursor:pointer;position:relative;transition:background .12s;user-select:none;}
+.dp-day:hover{background:rgba(77,184,255,0.18)!important;color:#fff!important;}
+.dp-dot{position:absolute;bottom:2px;left:50%;transform:translateX(-50%);width:4px;height:4px;border-radius:50%;}
+.dp-wrap{margin-top:6px;background:#060e1e;border:1px solid var(--border-med);border-radius:8px;padding:12px;}
+.dp-nav-btn{background:rgba(255,255,255,0.07);border:none;color:#7dd3fc;font-size:18px;cursor:pointer;width:32px;height:32px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:background .1s;}
+.dp-nav-btn:hover{background:rgba(255,255,255,0.15);}
+.dp-trigger{display:flex;align-items:center;gap:8px;padding:9px 13px;background:#000;border:1px solid var(--border-med);border-radius:7px;cursor:pointer;transition:border-color .15s;}
+.dp-trigger:hover{border-color:var(--gold);}
 
 /* CONFIRM */
 #confirm-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:300;align-items:center;justify-content:center}
@@ -3205,7 +3213,7 @@ function openEditPersonalEvent(evId){
   body.innerHTML=
     '<div class="form-row"><label>Event Title</label><input spellcheck="true" id="f-pe-edit-title" value="'+escHtml(ev.title)+'" autofocus /></div>'+
     '<div class="form-grid-2">'+
-      '<div class="form-row"><label>Date</label><input type="date" id="f-pe-edit-date" value="'+escHtml(ev.date||'')+'" /></div>'+
+      '<div class="form-row"><label>Date</label>'+ '<div id="f-pe-edit-date-cal-btn" class="dp-trigger" onclick="toggleDatePicker(\'f-pe-edit-date\',\'f-pe-edit-date-cal\');">'+ '<span style="font-size:16px;">&#128197;</span>'+ '<span id="f-pe-edit-date-cal-txt" style="flex:1;font-size:13px;color:#4a9edd;">Select a date…</span>'+ '<span class="dp-arrow" style="font-size:11px;color:#4a9edd;">&#9660;</span></div>'+ '<input type="date" id="f-pe-edit-date" style="display:none;" value="'+escHtml(ev.date||'')+'" />'+ '<div id="f-pe-edit-date-cal" class="dp-wrap" style="display:none;"></div></div>'+
       '<div class="form-row"><label>Time (optional)</label><select id="f-pe-edit-time" style="width:100%;">'+PE_TIME_OPTS+'</select></div>'+
     '</div>'+
     '<div class="form-row"><label>Category</label><select id="f-pe-edit-cat">'+catSel+'</select></div>'+
@@ -3215,6 +3223,7 @@ function openEditPersonalEvent(evId){
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>'+
     '<button class="btn btn-primary" onclick="saveEditPersonalEvent('+evId+')">Save Changes</button>';
   overlay.classList.add('open');
+  setTimeout(function(){dpRefreshDisplay('f-pe-edit-date','f-pe-edit-date-cal',ev.date||'');},10);
 }
 async function saveEditPersonalEvent(evId){
   var ev=(appData.personalEvents||[]).find(function(e){return e.id==evId;});
@@ -3233,6 +3242,94 @@ async function saveEditPersonalEvent(evId){
   renderDashboard();
   showToast('Event updated');
 }
+
+// ── DATE PICKER ENGINE ──
+var _dpState={};
+function toggleDatePicker(inputId,calId){
+  var cal=document.getElementById(calId);
+  if(!cal) return;
+  if(cal.style.display==='none'||cal.style.display===''){
+    var inp=document.getElementById(inputId);
+    var v=(inp&&inp.value)||todayStr();
+    var d=new Date(v+'T12:00:00');
+    _dpState[calId]={year:d.getFullYear(),month:d.getMonth(),inputId:inputId};
+    _renderDpCal(calId);
+    cal.style.display='block';
+    var btn=document.getElementById(calId+'-btn');
+    if(btn){var arr=btn.querySelector('.dp-arrow');if(arr)arr.textContent='▲';}
+  } else {
+    cal.style.display='none';
+    var btn2=document.getElementById(calId+'-btn');
+    if(btn2){var arr2=btn2.querySelector('.dp-arrow');if(arr2)arr2.textContent='▼';}
+  }
+}
+function dpNav(calId,dir){
+  var s=_dpState[calId];if(!s)return;
+  s.month+=dir;
+  if(s.month>11){s.month=0;s.year++;}
+  if(s.month<0){s.month=11;s.year--;}
+  _renderDpCal(calId);
+}
+function dpPick(calId,ds){
+  var s=_dpState[calId];if(!s)return;
+  var inp=document.getElementById(s.inputId);
+  if(inp) inp.value=ds;
+  dpRefreshDisplay(s.inputId,calId,ds);
+  var cal=document.getElementById(calId);
+  if(cal) cal.style.display='none';
+  var btn=document.getElementById(calId+'-btn');
+  if(btn){var arr=btn.querySelector('.dp-arrow');if(arr)arr.textContent='▼';}
+}
+function dpRefreshDisplay(inputId,calId,ds){
+  var txtEl=document.getElementById(calId+'-txt');
+  if(!txtEl) return;
+  if(!ds){txtEl.textContent='Select a date…';txtEl.style.color='#4a9edd';return;}
+  var d=new Date(ds+'T12:00:00');
+  txtEl.textContent=d.toLocaleDateString('en-US',{weekday:'short',month:'long',day:'numeric',year:'numeric'});
+  txtEl.style.color='var(--text)';
+}
+function _renderDpCal(calId){
+  var cal=document.getElementById(calId);
+  var s=_dpState[calId];
+  if(!cal||!s) return;
+  var MO=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var y=s.year,mo=s.month;
+  var fd=new Date(y,mo,1).getDay();
+  var dim=new Date(y,mo+1,0).getDate();
+  var today=todayStr();
+  var curVal=(document.getElementById(s.inputId)||{}).value||'';
+  var evDates={};
+  (appData.clients||[]).forEach(function(c){(c.events||[]).forEach(function(ev){evDates[ev.date]=true;});});
+  (appData.personalEvents||[]).forEach(function(ev){evDates[ev.date]=true;});
+  var cq="'"+calId+"'";
+  var h='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">';
+  h+='<button class="dp-nav-btn" onclick="dpNav('+cq+',-1)">&#8249;</button>';
+  h+='<span style="font-size:13px;font-weight:600;color:var(--gold-light);">'+MO[mo]+' '+y+'</span>';
+  h+='<button class="dp-nav-btn" onclick="dpNav('+cq+',1)">&#8250;</button>';
+  h+='</div>';
+  h+='<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:6px;">';
+  ['Su','M','Tu','W','Th','F','Sa'].forEach(function(d){h+='<div style="text-align:center;font-size:9px;color:#4a9edd;letter-spacing:.5px;padding:2px 0;font-weight:600;">'+d+'</div>';});
+  h+='</div>';
+  h+='<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;">';
+  for(var i=0;i<fd;i++) h+='<div></div>';
+  for(var d2=1;d2<=dim;d2++){
+    var ds=y+'-'+String(mo+1).padStart(2,'0')+'-'+String(d2).padStart(2,'0');
+    var isTod=ds===today;
+    var isSel=ds===curVal;
+    var hasEv=!!evDates[ds];
+    var dq="'"+ds+"'";
+    var bg=isSel?'var(--gold)':isTod?'rgba(249,115,22,0.28)':'rgba(255,255,255,0.04)';
+    var col=isSel?'#000':isTod?'#f97316':'var(--text)';
+    var fw=isSel||isTod?'700':'400';
+    var bord=isTod&&!isSel?'1px solid rgba(249,115,22,0.5)':'1px solid transparent';
+    h+='<div class="dp-day" onclick="dpPick('+cq+','+dq+')" style="background:'+bg+';color:'+col+';font-weight:'+fw+';border:'+bord+';">'+d2;
+    if(hasEv) h+='<div class="dp-dot" style="background:'+(isSel?'#000':'#f97316')+';"></div>';
+    h+='</div>';
+  }
+  h+='</div>';
+  cal.innerHTML=h;
+}
+
 
 // ── PDF RECEIPT ──
 function downloadReceiptPdf(clientId){
@@ -5795,9 +5892,9 @@ function renderCalendar(){
 
     const chips=shownEvents.map(ev=>{
       if(ev.isPersonal){
-        const timeLabel=ev.time?ev.time.replace(':00',''):'';
-        return `<div class="cal-ev-chip" style="background:rgba(167,139,250,0.15);color:#c4b5fd;border-left:2px solid #a78bfa;"
-          onclick="event.stopPropagation();" title="${escHtml(ev.category||'Personal')} — ${escHtml(ev.title)}${ev.time?' at '+ev.time:''}">
+        const timeLabel=ev.time?fmtTime12h(ev.time):'';
+        return `<div class="cal-ev-chip" style="background:rgba(167,139,250,0.15);color:#c4b5fd;border-left:2px solid #a78bfa;cursor:pointer;"
+          onclick="event.stopPropagation();openEditPersonalEvent(${ev.id});" title="${escHtml(ev.category||'Personal')} — ${escHtml(ev.title)}${ev.time?' at '+fmtTime12h(ev.time):''} · tap to edit">
           ${ev._icon||'📆'} ${escHtml(timeLabel?timeLabel+' ':'')}${escHtml(ev.title)}
         </div>`;
       }
@@ -5907,7 +6004,7 @@ function calDayClick(ds){
     openModal('add-event',null);
     setTimeout(()=>{
       const dateInput=document.getElementById('f-date');
-      if(dateInput) dateInput.value=ds;
+      if(dateInput){ dateInput.value=ds; dpRefreshDisplay('f-date','f-date-cal',ds); }
     },50);
   }
 }
@@ -6856,7 +6953,13 @@ function openModal(type,clientId,extraId){
       </div></div>
       <div class="form-row">
         <label>Date</label>
-        <input type="date" id="f-date" />
+        <div id="f-date-cal-btn" class="dp-trigger" onclick="toggleDatePicker('f-date','f-date-cal')">
+          <span style="font-size:16px;">&#128197;</span>
+          <span id="f-date-cal-txt" style="flex:1;font-size:13px;color:#4a9edd;">Select a date…</span>
+          <span class="dp-arrow" style="font-size:11px;color:#4a9edd;">&#9660;</span>
+        </div>
+        <input type="date" id="f-date" style="display:none;" />
+        <div id="f-date-cal" class="dp-wrap" style="display:none;"></div>
       </div>
       <div class="form-row" style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
         <input type="checkbox" id="f-allday" onchange="toggleAllDay()" style="width:16px;height:16px;accent-color:var(--gold);cursor:pointer;" />
@@ -7340,7 +7443,7 @@ function openModal(type,clientId,extraId){
     body.innerHTML=
       '<div class="form-row"><label>Event Title</label><input spellcheck="true" id="f-pe-title" placeholder="e.g. Haircut, Lunch with client, Out of office…" autofocus /></div>'+
       '<div class="form-grid-2">'+
-        '<div class="form-row"><label>Date</label><input type="date" id="f-pe-date" value="'+todayStr()+'" /></div>'+
+        '<div class="form-row"><label>Date</label>'+ '<div id="f-pe-date-cal-btn" class="dp-trigger" onclick="toggleDatePicker(\'f-pe-date\',\'f-pe-date-cal\');">'+ '<span style="font-size:16px;">&#128197;</span>'+ '<span id="f-pe-date-cal-txt" style="flex:1;font-size:13px;color:#4a9edd;">Select a date…</span>'+ '<span class="dp-arrow" style="font-size:11px;color:#4a9edd;">&#9660;</span></div>'+ '<input type="date" id="f-pe-date" style="display:none;" value="'+todayStr()+'" />'+ '<div id="f-pe-date-cal" class="dp-wrap" style="display:none;"></div></div>'+
         '<div class="form-row"><label>Time (optional)</label><select id="f-pe-time" style="width:100%;"><option value="">-- No Time --</option><option value="06:00">6 AM</option><option value="06:15">6:15 AM</option><option value="06:30">6:30 AM</option><option value="06:45">6:45 AM</option><option value="07:00">7 AM</option><option value="07:15">7:15 AM</option><option value="07:30">7:30 AM</option><option value="07:45">7:45 AM</option><option value="08:00">8 AM</option><option value="08:15">8:15 AM</option><option value="08:30">8:30 AM</option><option value="08:45">8:45 AM</option><option value="09:00">9 AM</option><option value="09:15">9:15 AM</option><option value="09:30">9:30 AM</option><option value="09:45">9:45 AM</option><option value="10:00">10 AM</option><option value="10:15">10:15 AM</option><option value="10:30">10:30 AM</option><option value="10:45">10:45 AM</option><option value="11:00">11 AM</option><option value="11:15">11:15 AM</option><option value="11:30">11:30 AM</option><option value="11:45">11:45 AM</option><option value="12:00">12 PM</option><option value="12:15">12:15 PM</option><option value="12:30">12:30 PM</option><option value="12:45">12:45 PM</option><option value="13:00">1 PM</option><option value="13:15">1:15 PM</option><option value="13:30">1:30 PM</option><option value="13:45">1:45 PM</option><option value="14:00">2 PM</option><option value="14:15">2:15 PM</option><option value="14:30">2:30 PM</option><option value="14:45">2:45 PM</option><option value="15:00">3 PM</option><option value="15:15">3:15 PM</option><option value="15:30">3:30 PM</option><option value="15:45">3:45 PM</option><option value="16:00">4 PM</option><option value="16:15">4:15 PM</option><option value="16:30">4:30 PM</option><option value="16:45">4:45 PM</option><option value="17:00">5 PM</option><option value="17:15">5:15 PM</option><option value="17:30">5:30 PM</option><option value="17:45">5:45 PM</option><option value="18:00">6 PM</option><option value="18:15">6:15 PM</option><option value="18:30">6:30 PM</option><option value="18:45">6:45 PM</option><option value="19:00">7 PM</option><option value="19:15">7:15 PM</option><option value="19:30">7:30 PM</option><option value="19:45">7:45 PM</option><option value="20:00">8 PM</option><option value="20:15">8:15 PM</option><option value="20:30">8:30 PM</option><option value="20:45">8:45 PM</option><option value="21:00">9 PM</option><option value="21:15">9:15 PM</option><option value="21:30">9:30 PM</option><option value="21:45">9:45 PM</option></select></div>'+
       '</div>'+
       '<div class="form-row"><label>Category</label><select id="f-pe-cat">'+
@@ -7352,6 +7455,7 @@ function openModal(type,clientId,extraId){
       '</select></div>'+
       '<div class="form-row"><label>Notes (optional)</label><textarea spellcheck="true" id="f-pe-notes" placeholder="Any details…" style="height:60px;"></textarea></div>';
     footer.innerHTML='<button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="savePersonalEvent()">Add Event</button>';
+    setTimeout(function(){dpRefreshDisplay('f-pe-date','f-pe-date-cal',todayStr());},10);
 
   } else if(type==='add-comm'){
     const c=getClient(clientId);
