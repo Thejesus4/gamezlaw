@@ -2773,9 +2773,9 @@ function startMessagesListener(){
   /* v235 — Case File / letter drafts arrive live. Client records are loaded
      once, so a draft Claude saved (Worker save_to_case_file, or another
      device) stayed invisible until a reload. Every claudeDocs write now
-     stamps gamezlaw/caseFilePing {clientId, ts}; each open copy re-reads just
+     stamps gamezlaw/meta/caseFilePing {clientId, ts}; each open copy re-reads just
      that client's claudeDocs and repaints the drafts card / open file. */
-  try{ _fbDb.ref('gamezlaw/caseFilePing').on('value', function(snap){ _v235OnCaseFilePing(snap.val()); }); }catch(e){ console.warn('v235 ping listener',e); }
+  try{ _fbDb.ref('gamezlaw/meta/caseFilePing').on('value', function(snap){ _v235OnCaseFilePing(snap.val()); }); }catch(e){ console.warn('v235 ping listener',e); }
 }
 var _v235LastPing='';
 async function _v235OnCaseFilePing(p){
@@ -2795,7 +2795,7 @@ async function _v235OnCaseFilePing(p){
   }catch(e){ console.warn('v235 case file refresh',e); }
 }
 function _v235Ping(clientId){
-  try{ if(_fbDb&&clientId!=null) _fbDb.ref('gamezlaw/caseFilePing').set({clientId:String(clientId), ts:Date.now()}); }catch(e){}
+  try{ if(_fbDb&&clientId!=null) _fbDb.ref('gamezlaw/meta/caseFilePing').set({clientId:String(clientId), ts:Date.now()}); }catch(e){}
 }
 
 async function initFirebase(config){
@@ -3143,7 +3143,7 @@ var GUARDED_CLIENT_COLLS = ['commLog','payments','charges','events','claudeDocs'
    hints the Worker wrote in the last 60 seconds — the v209 bug reappearing
    under a new name, and it would quietly break the reply routing this build
    exists to fix. ANY new Worker-written meta collection belongs on this list. */
-var GUARDED_META_COLLS = ['inboundUnmatched','outboundUnfiled','leadMessages','lastOutboundByPhone','secretaryLastSeen'];   /* v223 — secretaryLastSeen */
+var GUARDED_META_COLLS = ['inboundUnmatched','outboundUnfiled','leadMessages','lastOutboundByPhone','secretaryLastSeen','caseFilePing'];   /* v235 — caseFilePing: written only by its own .set() */   /* v223 — secretaryLastSeen */
 
 /* ══ v223 — TASKS, ONE AT A TIME ═══════════════════════════════════════════
    Until now every task change rewrote the WHOLE list (metaSet → .set()). Two
