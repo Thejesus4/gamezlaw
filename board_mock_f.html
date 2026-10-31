@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Board mock F — Gámez</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html{scroll-snap-type:y proximity;}
+  body{background:#f6f1e7;color:#2b2520;font-family:Georgia,'Times New Roman',serif;}
+  .sans{font-family:-apple-system,'Helvetica Neue',Arial,sans-serif;}
+  .page{min-height:100vh;padding:38px 60px 30px;scroll-snap-align:start;position:relative;}
+
+  .kicker{font-family:-apple-system,Arial,sans-serif;font-size:12px;letter-spacing:3px;text-transform:uppercase;color:#8a7f70;}
+  .kicker b{color:#9c3d1e;font-weight:600;}
+  .headrow{display:flex;justify-content:space-between;align-items:flex-end;gap:30px;}
+  h1{font-size:46px;font-weight:400;margin:2px 0 0;}
+  .wx{font-size:17px;color:#5d5346;font-style:italic;margin-top:2px;}
+
+  .nums{display:flex;gap:34px;align-items:flex-end;padding-bottom:4px;}
+  .big{font-size:38px;color:#22334f;line-height:1;text-align:center;}
+  .big small{font-size:12px;font-family:-apple-system,Arial,sans-serif;color:#8a7f70;display:block;margin-top:4px;letter-spacing:.5px;}
+
+  .wxstrip{display:flex;gap:8px;margin:16px 0 6px;}
+  .wxday{width:86px;background:#fffdf7;border:1px solid #e7decb;border-radius:12px;padding:8px 4px;text-align:center;font-family:-apple-system,Arial,sans-serif;position:relative;overflow:hidden;}
+  .wxday.today{border-color:#c9a86a;background:#fdf8ec;}
+  .wxday .d{font-size:11px;letter-spacing:1px;color:#8a7f70;text-transform:uppercase;}
+  .wxday .i{font-size:24px;margin:3px 0 1px;display:inline-block;}
+  .wxday.sunny .i{animation:sunpulse 3.2s ease-in-out infinite;}
+  @keyframes sunpulse{0%,100%{transform:scale(1);filter:brightness(1);}50%{transform:scale(1.14);filter:brightness(1.15);}}
+  .wxday .t{font-size:14px;color:#2b2520;font-weight:600;}
+  .wxday .t span{color:#9a9082;font-weight:400;}
+  .wxday .r{font-size:11px;color:#4a7fa8;height:13px;}
+  .drop{position:absolute;top:8px;font-size:9px;color:#4a7fa8;animation:fall 1.6s linear infinite;opacity:0;}
+  @keyframes fall{0%{transform:translateY(0);opacity:0;}15%{opacity:.9;}85%{opacity:.8;}100%{transform:translateY(58px);opacity:0;}}
+
+  .cols{display:grid;grid-template-columns:1.22fr 1fr;gap:52px;margin-top:8px;}
+  .sec{font-family:-apple-system,Arial,sans-serif;font-size:12px;letter-spacing:3px;text-transform:uppercase;color:#22334f;font-weight:700;border-top:2px solid #22334f;padding-top:10px;margin-top:20px;margin-bottom:4px;}
+  .row{display:flex;align-items:baseline;gap:18px;padding:8px 0;animation:rise .5s ease both;}
+  .row:nth-child(2){animation-delay:.05s}.row:nth-child(3){animation-delay:.1s}.row:nth-child(4){animation-delay:.15s}.row:nth-child(5){animation-delay:.2s}
+  @keyframes rise{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:none;}}
+  .time{font-family:-apple-system,Arial,sans-serif;font-size:15px;color:#8a7f70;width:58px;flex-shrink:0;text-align:right;font-variant-numeric:tabular-nums;}
+  .what{font-size:22px;line-height:1.3;}
+  .what small{display:block;font-size:14px;color:#7a6f5f;font-family:-apple-system,Arial,sans-serif;margin-top:1px;}
+  .court .what{color:#9c3d1e;}
+  .court .what small{color:#9c3d1e;opacity:.72;}
+  .task{font-size:17px;padding:5px 0;color:#43392e;}
+  .task em{font-style:normal;font-family:-apple-system,Arial,sans-serif;font-size:13px;color:#8a7f70;margin-left:8px;}
+  .hot{color:#9c3d1e;}
+
+  .news{font-size:18px;line-height:1.4;padding:8px 0;color:#22334f;border-bottom:1px solid #eee5d4;}
+  .news:last-of-type{border-bottom:none;}
+  .news .src{font-family:-apple-system,Arial,sans-serif;font-size:11px;color:#9c3d1e;letter-spacing:1px;margin-left:8px;text-transform:uppercase;}
+  .news.lead{font-size:21px;font-weight:bold;}
+
+  .fab{position:fixed;right:26px;bottom:26px;width:58px;height:58px;border-radius:50%;background:#22334f;color:#f6f1e7;display:flex;align-items:center;justify-content:center;font-size:24px;box-shadow:0 4px 14px rgba(34,51,79,.35);cursor:pointer;font-family:-apple-system,Arial,sans-serif;}
+  .fab:hover{transform:scale(1.06);}
+  .hint{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);font-family:-apple-system,Arial,sans-serif;font-size:13px;color:#8a7f70;text-align:center;animation:bob 2.4s ease-in-out infinite;}
+  @keyframes bob{0%,100%{transform:translate(-50%,0);}50%{transform:translate(-50%,6px);}}
+
+  /* page 2 — the week */
+  .p2 h1{font-size:38px;}
+  .wkgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;margin-top:22px;}
+  .wkday{background:#fffdf7;border:1px solid #e7decb;border-radius:12px;min-height:220px;padding:10px 10px;}
+  .wkday.today{border-color:#c9a86a;background:#fdf8ec;}
+  .wkday .dn{font-family:-apple-system,Arial,sans-serif;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#8a7f70;}
+  .wkday .dd{font-size:22px;margin:2px 0 8px;}
+  .chip{font-family:-apple-system,Arial,sans-serif;font-size:13px;line-height:1.35;padding:5px 7px;border-radius:7px;margin-bottom:6px;background:#efe7d6;color:#43392e;}
+  .chip.court{background:#f3ddd2;color:#7c2d12;}
+  .chip.me{background:#e3e8da;color:#3f4a33;}
+  .chip.trip{background:#dde4ee;color:#22334f;}
+  .later{margin-top:26px;font-size:18px;color:#43392e;}
+  .later b{color:#22334f;}
+  .later .li{padding:7px 0;border-bottom:1px solid #eee5d4;}
+</style></head><body>
+
+<div class="page">
+  <div class="kicker">Monday · <b>Día de los Muertos</b> · Gámez Law · Martha home Friday 🛬</div>
+  <div class="headrow">
+    <div>
+      <h1>November 2</h1>
+      <div class="wx">64° now, heading to 81° — clear all day. Suit weather.</div>
+    </div>
+    <div class="nums">
+      <div class="big">3<small>texts waiting</small></div>
+      <div class="big">1<small>new discovery</small></div>
+      <div class="big">10d<small>to Guadalupe</small></div>
+    </div>
+  </div>
+
+  <div class="wxstrip">
+    <div class="wxday today sunny"><div class="d">Today</div><div class="i">☀️</div><div class="t">81° <span>63°</span></div><div class="r"></div></div>
+    <div class="wxday sunny"><div class="d">Tue</div><div class="i">🌤️</div><div class="t">84° <span>66°</span></div><div class="r"></div></div>
+    <div class="wxday"><div class="d">Wed</div><div class="i">⛅</div><div class="t">78° <span>60°</span></div><div class="r">20%</div></div>
+    <div class="wxday"><div class="d">Thu</div><div class="i">🌧️</div><div class="t">71° <span>55°</span></div><div class="r">70%</div>
+      <span class="drop" style="left:18%;animation-delay:0s;">💧</span>
+      <span class="drop" style="left:48%;animation-delay:.5s;">💧</span>
+      <span class="drop" style="left:74%;animation-delay:1s;">💧</span>
+    </div>
+    <div class="wxday sunny"><div class="d">Fri</div><div class="i">☀️</div><div class="t">68° <span>52°</span></div><div class="r"></div></div>
+  </div>
+
+  <div class="cols">
+    <div>
+      <div class="sec">Your Day</div>
+      <div class="row"><div class="time">8:30</div><div class="what">Firestone — alignment<small>tight against 9:00 court</small></div></div>
+      <div class="row court"><div class="time">9:00</div><div class="what">Reyna · County Court 5, Floor 1<small>Pretrial · owes $1,850 · no offer yet · gathering funds</small></div></div>
+      <div class="row court"><div class="time">10:30</div><div class="what">Williamson · 187th District, Floor 4<small>Arraignment · reset confirmed 10/22</small></div></div>
+      <div class="row"><div class="time">2:00</div><div class="what">Steven Rice — office<small>payment plan paperwork</small></div></div>
+
+      <div class="sec">Don&rsquo;t Forget</div>
+      <div class="task hot">Call Fili Reyna — still waiting on funds <em class="hot">today</em></div>
+      <div class="task">Cat sitter — both West Texas trips <em>by Friday</em></div>
+      <div class="task">Mom — dogs, both trips <em>by Friday</em></div>
+    </div>
+    <div>
+      <div class="sec">San Antonio</div>
+      <div class="news lead">Record early voting in Bexar County ahead of Tuesday&rsquo;s midterms<span class="src">KSAT</span></div>
+      <div class="news">SAPD: three arrested after East Side chase, no injuries<span class="src">KSAT</span></div>
+      <div class="news">Spurs hold off Mavs 118–112 behind Wemby&rsquo;s 31<span class="src">Expr-News</span></div>
+
+      <div class="sec">National</div>
+      <div class="news lead">Midterms: the five races that decide the House<span class="src">Daily Beast</span></div>
+      <div class="news">Closing-argument chaos as both parties blitz swing states<span class="src">Daily Beast</span></div>
+      <div class="news">Appeals court fast-tracks challenge to border policy<span class="src">Daily Beast</span></div>
+    </div>
+  </div>
+
+  <div class="hint">the week ⌄</div>
+  <div class="fab" title="Add an appointment, a task, or ask Claude">✎</div>
+</div>
+
+<div class="page p2">
+  <div class="kicker">Week of November 2</div>
+  <h1>The Week</h1>
+  <div class="wkgrid">
+    <div class="wkday today"><div class="dn">Mon</div><div class="dd">2</div>
+      <div class="chip me">8:30 Firestone</div><div class="chip court">9:00 Reyna · CC5</div><div class="chip court">10:30 Williamson · 187th</div><div class="chip">2:00 Rice — office</div></div>
+    <div class="wkday"><div class="dn">Tue</div><div class="dd">3</div>
+      <div class="chip me">🗳 Midterms — vote</div><div class="chip">2:00 Rice — office</div></div>
+    <div class="wkday"><div class="dn">Wed</div><div class="dd">4</div>
+      <div class="chip">11:00 Rojas — office</div><div class="chip me">Rojas payment promised</div></div>
+    <div class="wkday"><div class="dn">Thu</div><div class="dd">5</div>
+      <div class="chip court">9:00 Docket · CC12</div></div>
+    <div class="wkday"><div class="dn">Fri</div><div class="dd">6</div>
+      <div class="chip trip">🛬 Martha home</div><div class="chip me">cat sitter + dogs — deadline</div></div>
+    <div class="wkday"><div class="dn">Sat</div><div class="dd">7</div>
+      <div class="chip me">🚴 ride?</div></div>
+    <div class="wkday"><div class="dn">Sun</div><div class="dd">8</div></div>
+  </div>
+  <div class="later">
+    <div class="li"><b>Thu Nov 12 – Sun Nov 15</b> — West Texas · Guadalupe Mountains 🏜</div>
+    <div class="li"><b>Wed Dec 23 – Sun Dec 27</b> — Terlingua → Marfa, Christmas trip</div>
+  </div>
+  <div class="fab" title="Add an appointment, a task, or ask Claude">✎</div>
+</div>
+
+</body></html>
